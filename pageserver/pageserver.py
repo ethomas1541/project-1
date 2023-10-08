@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 import socket    # Basic TCP/IP communication on the internet
 import _thread   # Response computation runs concurrently with main program
+import os.path
 
 
 def listen(portnum):
@@ -58,16 +59,6 @@ def serve(sock, func):
         (clientsocket, address) = sock.accept()
         _thread.start_new_thread(func, (clientsocket,))
 
-
-##
-# Starter version only serves cat pictures. In fact, only a
-# particular cat picture.  This one.
-##
-CAT = """
-     ^ ^
-   =(   )=
-"""
-
 # HTTP response codes, as the strings we will actually send.
 # See:  https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
 # or    http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
@@ -81,7 +72,6 @@ STATUS_NOT_IMPLEMENTED = "HTTP/1.0 401 Not Implemented\n\n"
 def respond(sock):
     """
     This server responds only to GET requests (not PUT, POST, or UPDATE).
-    Any valid GET request is answered with an ascii graphic of a cat.
     """
     sent = 0
     request = sock.recv(1024)  # We accept only short requests
@@ -91,8 +81,50 @@ def respond(sock):
 
     parts = request.split()
     if len(parts) > 1 and parts[0] == "GET":
-        transmit(STATUS_OK, sock)
-        transmit(CAT, sock)
+        """
+        for i in range(len(parts)):
+            print(str(i) + "\t" + parts[i])
+        """
+            
+        # The "Referer" field of the request seems to be a string denoting exactly what the user typed into their
+        # browser bar. Here I can use this to respond by transmitting the appropriate file.
+
+        # Sometimes this user-input seems to appear in parts[1], and sometimes it's replaced with /favicon.ico.
+        # It's frankly been unpredictable and frustrating in my implementation, so I've added logic for dynamically
+        # attempting to locate it.
+
+        req_file = parts[1]
+
+        if req_file == "/favicon.ico":
+            req_file = '/' + parts[38].split('/')[-1]
+
+        illegal = False
+
+        if req_file.count('.') > 1:
+            illegal = True
+
+        for c in req_file:
+            if not (c.isalnum() or c in "()_-,./"):
+                illegal = True
+                break
+
+        if illegal:
+            transmit(STATUS_FORBIDDEN, sock)
+            transmit("<h1>403 Forbidden</h1>\nRequest \"" + req_file + "\" is forbidden (may contain illegal characters).", sock)
+        else:    
+            rpath = os.path.dirname(__file__) + get_options().DOCROOT + req_file
+            fpath = rpath.replace("pageserver", "")
+
+            try:
+                f = open(fpath, 'r')
+                transmit(STATUS_OK, sock)
+                transmit(f.read(), sock)
+            except FileNotFoundError:
+                transmit(STATUS_NOT_FOUND, sock)
+                transmit("<h1>404 Not Found</h1>\nFile \"" + fpath + "\" was not found.", sock)
+            except IsADirectoryError:
+                transmit(STATUS_NOT_FOUND, sock)
+                transmit("<h1>404 Not Found</h1>\nFile \"" + fpath + "\" is a directory! Did you try to connect to the port directly?", sock)
     else:
         log.info("Unhandled request: {}".format(request))
         transmit(STATUS_NOT_IMPLEMENTED, sock)
